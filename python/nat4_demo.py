@@ -164,12 +164,24 @@ class Endpoint(Managed):
         self.sock = udp_bind(("127.0.0.1" if gateway else "0.0.0.0", 0))
 
     def send(self, text, target):
-        data = text.encode("ascii")
+        self.send_bytes(text.encode("ascii"), target)
+
+    def send_bytes(self, data, target):
         if self.gateway:
             data = ("TO " + addr_text(target) + "\n").encode("ascii") + data
         udp_send(self.sock, data, self.gateway or target)
 
     def recv(self):
+        item = self.recv_bytes()
+        if item is None:
+            return None
+        data, source = item
+        try:
+            return data.decode("ascii"), source
+        except UnicodeError:
+            return None
+
+    def recv_bytes(self):
         item = udp_recv(self.sock)
         if item is None:
             return None
@@ -181,10 +193,7 @@ class Endpoint(Managed):
             if item is None:
                 return None
             source, data = item
-        try:
-            return data.decode("ascii"), source
-        except UnicodeError:
-            return None
+        return data, source
 
     def close(self):
         self.sock.close()
@@ -556,13 +565,13 @@ def punch(cfg, endpoints, target, session, other, r, duration):
                    best.total_rtt * 1000 / best.pongs if best.pongs else 0.0)
 
 
-def run_peer(cfg):
+def run_peer(cfg, on_connected=None):
     if (not valid_label(cfg.room) or not valid_label(cfg.id) or len(cfg.id) > 32
             or cfg.strategy not in ("predict", "fanout") or not 1 <= cfg.fanout <= 512
             or not 1 <= cfg.pps <= 2000 or not 1 <= cfg.port_low <= cfg.port_high - 3
             or cfg.port_high > 65535):
         raise ValueError("invalid peer options")
-    with Control(socket.create_connection(cfg.server, timeout=5)) as control:
+    with Control(socket.create_connection(cfg.server, timeout=5)) as control, ExitStack() as live_round:
         control.send("JOIN {} {}".format(cfg.room, cfg.id))
         while True:
             matched = control.recv()
@@ -587,6 +596,12 @@ def run_peer(cfg):
                 log("[{}] {} pongs={} remote={} mean_rtt_ms={:.3f}".format(
                     cfg.id, "DIRECT_OK" if connected else "NO_DIRECT_PATH", last.pongs,
                     addr_text(last.remote) if last.remote else "none", last.mean_rtt_ms))
+                if connected and on_connected is not None:
+                    chosen = next(e for e in endpoints if e.sock.getsockname() == last.local)
+                    control.close()
+                    # Keep exactly the socket that proved this path. Binding a
+                    # replacement could create a different mapping at the NAT.
+                    on_connected(chosen, last.remote, session, other)
                 return PeerResult(connected, last)
             if not line.startswith("ROUND "):
                 raise ValueError("coordinator: " + line)
@@ -594,31 +609,33 @@ def run_peer(cfg):
             if r != expected_round or r >= rounds:
                 raise ValueError("unexpected round number")
             expected_round += 1
-            with ExitStack() as stack:
-                discovery = stack.enter_context(Endpoint(cfg.gateway))
-                samples = [probe(discovery, server) for server in probes]
-                try:
-                    offered, label = predict(samples)
-                except ValueError:
-                    if cfg.strategy != "fanout" or any(s[0] != samples[0][0] for s in samples):
-                        raise
-                    offered, label = samples[2], "no-valid-next-port-prediction"
-                endpoints = [discovery]
-                if cfg.strategy == "fanout":
+            live_round.close()
+            # Keep this round's sockets alive until DONE/next ROUND, including
+            # the entire optional forwarding callback after verified success.
+            discovery = live_round.enter_context(Endpoint(cfg.gateway))
+            samples = [probe(discovery, server) for server in probes]
+            try:
+                offered, label = predict(samples)
+            except ValueError:
+                if cfg.strategy != "fanout" or any(s[0] != samples[0][0] for s in samples):
+                    raise
+                offered, label = samples[2], "no-valid-next-port-prediction"
+            endpoints = [discovery]
+            if cfg.strategy == "fanout":
+                port = rng.port(cfg.port_low, cfg.port_high)
+                while any(s[1] == port for s in samples):
                     port = rng.port(cfg.port_low, cfg.port_high)
-                    while any(s[1] == port for s in samples):
-                        port = rng.port(cfg.port_low, cfg.port_high)
-                    offered = (samples[2][0], port)
-                    endpoints = [stack.enter_context(Endpoint(cfg.gateway)) for _ in range(cfg.fanout)]
-                sample_text = ",".join(addr_text(s) for s in samples)
-                log("[{}] round={} samples=[{}] {} strategy={} advertised={} sockets={}".format(
-                    cfg.id, r + 1, sample_text, label, cfg.strategy, addr_text(offered), len(endpoints)))
-                control.send("PLAN {} {}".format(addr_text(offered), sample_text))
-                go = control.recv()
-                if not go.startswith("GO "):
-                    raise ValueError("coordinator: " + go)
-                last = punch(cfg, endpoints, address(go[3:]), session, other, r, round_ms / 1000)
-                control.send("RESULT {}".format(last.pongs))
+                offered = (samples[2][0], port)
+                endpoints = [live_round.enter_context(Endpoint(cfg.gateway)) for _ in range(cfg.fanout)]
+            sample_text = ",".join(addr_text(s) for s in samples)
+            log("[{}] round={} samples=[{}] {} strategy={} advertised={} sockets={}".format(
+                cfg.id, r + 1, sample_text, label, cfg.strategy, addr_text(offered), len(endpoints)))
+            control.send("PLAN {} {}".format(addr_text(offered), sample_text))
+            go = control.recv()
+            if not go.startswith("GO "):
+                raise ValueError("coordinator: " + go)
+            last = punch(cfg, endpoints, address(go[3:]), session, other, r, round_ms / 1000)
+            control.send("RESULT {}".format(last.pongs))
 
 
 @dataclass

@@ -1,5 +1,7 @@
 # NAT4 UDP 打洞实验（Rust / Python）
 
+**WebDAV 端口转发已提供：** 见 [Python 隧道部署说明](python/TUNNEL.md)，可把电脑本地 TCP 端口经打洞后的 UDP 通路转发到 NAS 的 WebDAV 服务，支持双向 TLS 和保活。
+
 从零实现，纯 Rust 标准库，无第三方 crate。本机验证环境是 Windows；服务器和客户端使用可移植的标准网络接口。
 
 **NAS / Python 版已提供：** [`python/nat4_demo.py`](python/nat4_demo.py) 是 Python 3.8+ 单文件程序，仅使用标准库，无须安装 Rust 或 pip 依赖；服务器和客户端均可与 Rust 版混用。部署步骤见 [`python/README.md`](python/README.md)。在项目根目录执行 `python3 -u python/nat4_demo.py lab --case all --seed 7` 即可先做本机验证。以下构建命令与时长默认值针对 Rust 版。

@@ -1,5 +1,7 @@
 # NAT4 UDP 打洞实验：Python / NAS 版
 
+**新增 WebDAV / TCP 持续转发：** 部署见 [TUNNEL.md](TUNNEL.md)。使用 `nat4_tunnel.py serve/connect`，支持保活、可靠传输、双向 TLS 和并发 TCP 连接；需要本目录中的三个程序文件。下文仍介绍可独立运行的单文件打洞实验。
+
 **运行只需要 `nat4_demo.py` 一个文件和 Python 3.8+，全部使用标准库。** 不需要 Rust、pip、虚拟环境或第三方包。服务器、客户端、本机 NAT 模拟器都在这个文件里。
 
 本版本与项目里的 Rust 版使用相同的控制和 UDP 协议，可混用服务器和客户端。它验证 UDP 通路及数据回包，不提供持续隧道或文件传输。
