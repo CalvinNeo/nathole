@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """NAT4 UDP punching experiment. Python 3.8+, standard library only.
 
-Wire-compatible with the Rust demo in this repository. Run --help or read
-README.md before a real-network experiment. This is not a VPN or a relay.
+Run --help or read README.md before a real-network experiment.
+This module verifies UDP paths; persistent forwarding is in nat4_tunnel.py.
 """
 
 import argparse
@@ -89,7 +89,7 @@ def udp_bind(bind):
 
 
 class Rng:
-    """Same deterministic port sampler as Rust; never used for session tokens."""
+    """Deterministic xorshift64 port sampler; never used for session tokens."""
 
     def __init__(self, seed):
         self.state = max(seed & MASK64, 1)

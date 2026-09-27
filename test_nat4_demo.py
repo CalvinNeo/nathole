@@ -1,7 +1,6 @@
-"""Run: python3 -B -m unittest discover -s python -v (from the project root).
+"""Run: python3 -B -m unittest discover -v (from the project root).
 
-All network traffic stays on loopback. Rust interop tests are skipped when no
-Rust executable exists; set NAT4_RUST_EXE to test an explicit executable.
+All network traffic stays on loopback, including the independent process tests.
 """
 
 import os
@@ -23,8 +22,6 @@ import nat4_demo as n
 
 HERE = Path(__file__).resolve().parent
 PYTHON = [sys.executable, "-B", "-u", str(HERE / "nat4_demo.py")]
-RUST = Path(os.environ.get("NAT4_RUST_EXE", str(
-    HERE.parent / "target" / "release" / ("nat4-demo.exe" if os.name == "nt" else "nat4-demo"))))
 
 
 def read_udp(sock, timeout=1):
@@ -103,7 +100,7 @@ def process_pair(server_command, a_command, b_command):
             "server", "--bind", "127.0.0.1:0", "--rounds", "2", "--round-ms", "700"]))
         target = server.server_address()
         peers = [stack.enter_context(Child(command + [
-            "peer", "--server", target, "--room", "interop", "--id", peer_id,
+            "peer", "--server", target, "--room", "process-test", "--id", peer_id,
             "--strategy", "predict", "--pps", "200"]))
                  for command, peer_id in ((a_command, "alice"), (b_command, "bob"))]
         return [peer.result() for peer in peers]
@@ -254,27 +251,13 @@ class ProcessTests(unittest.TestCase):
         process_pair(PYTHON, PYTHON, PYTHON)
 
 
-@unittest.skipUnless(RUST.is_file(), "Rust executable not available (optional interop tests)")
-class RustInteropTests(unittest.TestCase):
-    def test_rust_server_with_two_python_peers(self):
-        process_pair([str(RUST)], PYTHON, PYTHON)
-
-    def test_python_server_with_two_rust_peers(self):
-        process_pair(PYTHON, [str(RUST)], [str(RUST)])
-
-    def test_python_server_with_mixed_peers(self):
-        process_pair(PYTHON, PYTHON, [str(RUST)])
-
-    def test_rust_server_with_mixed_peers(self):
-        process_pair([str(RUST)], [str(RUST)], PYTHON)
-
-    def test_rust_server_with_python_peers_behind_two_strict_nats(self):
+    def test_python_server_with_peers_behind_two_strict_nats(self):
         with ExitStack() as stack:
-            server = stack.enter_context(Child([str(RUST), "server", "--bind", "127.0.0.1:0",
-                                               "--rounds", "2", "--round-ms", "700"]))
+            server = stack.enter_context(Child(PYTHON + ["server", "--bind", "127.0.0.1:0",
+                                                       "--rounds", "2", "--round-ms", "700"]))
             target = n.address(server.server_address())
             nats = [stack.enter_context(n.Nat(n.NatConfig("127.65.5.{}".format(last)))) for last in (2, 3)]
-            configs = [n.PeerConfig(target, "mixednat", peer_id, gateway=nat.gateway)
+            configs = [n.PeerConfig(target, "strict-nat", peer_id, gateway=nat.gateway)
                        for peer_id, nat in zip(("alice", "bob"), nats)]
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [pool.submit(n.run_peer, cfg) for cfg in configs]

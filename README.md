@@ -1,62 +1,79 @@
-# NAT4 UDP 打洞实验（Rust / Python）
+# NAT4 UDP 打洞与 WebDAV 隧道
 
-**WebDAV 端口转发已提供：** 见 [Python 隧道部署说明](python/TUNNEL.md)，可把电脑本地 TCP 端口经打洞后的 UDP 通路转发到 NAS 的 WebDAV 服务，支持双向 TLS 和保活。
+**WebDAV / TCP 持续转发：** 部署见 [TUNNEL.md](TUNNEL.md)。使用 `nat4_tunnel.py serve/connect`，支持保活、可靠传输、双向 TLS 和并发 TCP 连接；需要项目根目录中的三个程序文件。下文介绍可独立运行的单文件打洞实验。
 
-从零实现，纯 Rust 标准库，无第三方 crate。本机验证环境是 Windows；服务器和客户端使用可移植的标准网络接口。
+**打洞实验只需要 `nat4_demo.py` 一个文件和 Python 3.8+，全部使用标准库。** 不需要 pip、虚拟环境或第三方包。服务器、客户端、本机 NAT 模拟器都在这个文件里。隧道所需的另外两个模块也只使用标准库；生成配对凭据时需要电脑上的 OpenSSL 命令。
 
-**NAS / Python 版已提供：** [`python/nat4_demo.py`](python/nat4_demo.py) 是 Python 3.8+ 单文件程序，仅使用标准库，无须安装 Rust 或 pip 依赖；服务器和客户端均可与 Rust 版混用。部署步骤见 [`python/README.md`](python/README.md)。在项目根目录执行 `python3 -u python/nat4_demo.py lab --case all --seed 7` 即可先做本机验证。以下构建命令与时长默认值针对 Rust 版。
+程序和测试文件均位于项目根目录，以下命令从该目录执行。NAS / Linux 使用 `python3`；Windows 使用已安装的 `python`。单文件 `peer` 模式验证 UDP 通路及数据回包后退出；持续转发使用 `nat4_tunnel.py`。
 
-它验证的是：两个具有**目标相关映射（APDM）和地址、端口相关过滤（APDF）**的 NAT 后面的客户端，能否建立 UDP 数据通路。这个组合对应这里讨论的严格对称型 NAT4。
+## 在 NAS 上先验证
 
-这是可执行的实验，不是“所有 NAT4 都能穿透”的实现。默认实验同时包含成功和失败场景。
+把 `nat4_demo.py` 复制到 NAS 的任意工作目录，通过 SSH 进入该目录：
 
-## 一条命令验证
-
-Windows PowerShell，已安装 Rust 1.75 或更新版本：
-
-```powershell
-cd C:\DiskF\nat4-hole-punch-demo
-cargo run --offline --release -- lab --case all --seed 7
+```bash
+python3 --version
+python3 -u nat4_demo.py lab --case all --seed 7
 ```
 
-构建后可直接运行，无须 Rust 运行时：
+这里的 `-u` 让日志立即输出。`lab` 只使用本机回环网络，不需要公网服务器、root 权限、路由器配置或防火墙端口转发。
 
-```powershell
-.\target\release\nat4-demo.exe lab --case all --seed 7
+| 实验 | 预期 | 含义 |
+|---|---|---|
+| `predict` | `PASS ... direct=True` | 两侧端口递增的严格 NAT 可以预测并连通 |
+| `random-small` | `PASS ... direct=True` | 两侧在已知 32 端口池随机分配，每侧 24 个 socket 可以命中 |
+| `random-full` | `PASS ... direct=False` | 全范围随机分配，当前种子及两轮预算内未连通 |
+| `predict-on-random` | `PASS ... direct=False` | 猜下一端口在当前随机场景下未连通 |
+
+`PASS` 表示**符合该实验的预期**。真正打通必须在双方看到 `VERIFIED ... round_trips=3` 和 `DIRECT_OK`；单独看到 ACK、协调器消息或 `PASS` 都不够。
+
+默认本机实验每轮 700 ms。如果 NAS 较慢，可增大时间：
+
+```bash
+python3 -u nat4_demo.py lab --case all --seed 7 --round-ms 2000
+python3 -u nat4_demo.py lab --case predict --seed 7 --trace true
 ```
 
-查看每一条 NAT 映射：
+调整轮次时长会同步调整模拟 NAT 的有效期及轮间等待，让旧映射先过期。随机场景的结果也可能受端口占用和系统负载影响；不符合预期会输出 `UNEXPECTED` 并返回非零退出码。
 
-```powershell
-.\target\release\nat4-demo.exe lab --case predict --trace true
+## 三台机器实际打洞
+
+需要一台有公网 IPv4 的服务器，以及位于两个待测 NAT 后面的客户端（NAS 可以是其中一端）。三台机器都直接运行同一个 Python 文件。
+
+在公网服务器上启动协调服务：
+
+```bash
+python3 -u nat4_demo.py server --bind 0.0.0.0:40000 --rounds 12 --round-ms 5000
 ```
 
-默认 seed=7 的预期结果：
+服务器主机防火墙及云安全组需允许 **TCP 40000、UDP 40000–40002**。固定端口 `P` 对应 TCP `P` 和 UDP `P`、`P+1`、`P+2`。服务器只交换候选地址、轮次和结果，并回答地址探测，不中继客户端的数据。
 
-| case | 两端 NAT | 策略 | 预期结果 |
-|---|---|---|---|
-| `predict` | 严格过滤，公网端口递增 | 预测下一端口 | 双向数据验证成功 |
-| `random-small` | 严格过滤，在 32 个端口中随机分配 | 每端 24 个新 socket；已知端口池 | 双向数据验证成功 |
-| `random-full` | 严格过滤，在 1024–65535 中随机分配 | 每端 24 个新 socket，尝试 2 轮 | 在给定预算内未成功 |
-| `predict-on-random` | 严格过滤，全范围随机分配 | 猜测下一端口，尝试 2 轮 | 在给定预算内未成功 |
+以下 `203.0.113.10` 是文档示例地址，必须改成服务器真实公网 IPv4。两个客户端在 55 秒内启动，使用相同 `room`、不同 `id`。
 
-`PASS` 表示**结果符合这个实验的预期**，不一定表示连接成功。真正连通会输出双方的 `VERIFIED` 和 `DIRECT_OK`；失败会输出 `NO_DIRECT_PATH`。
+NAS / 客户端 A：
 
-`random-small` 明确向客户端提供小端口池的范围。这是受控的可行性演示，不能把它的结果当作运营商随机 NAT4 的成功率。更换 seed、端口占用情况或系统负载，可能改变结果；`UNEXPECTED` 会以非零退出码报告。
+```bash
+python3 -u nat4_demo.py peer --server 203.0.113.10:40000 --room nas-test-1 --id alice --strategy predict
+```
 
-## 验证没有绕过 NAT 或偷用数据中继
+另一网络的客户端 B：
 
-实验使用真实的 localhost UDP socket 传递报文；两端分别通过用户态 NAT 网关。客户端算法与真实联网模式相同，只有底层收发适配器不同。
+```bash
+python3 -u nat4_demo.py peer --server 203.0.113.10:40000 --room nas-test-1 --id bob --strategy predict
+```
 
-- 映射键包含本地 `IP:port` 和远端 `IP:port`。换远端 IP 或端口就建立新映射。
-- 每条公网映射只允许来自该远端精确 `IP:port` 的报文进入。来自其他 IP 或端口的报文计入 `filtered`。
-- 同一映射复用公网端口；映射有有效期和端口容量限制，不会自动把随机映射转换为 cone NAT。
-- 客户端只知道探测结果和自己配置的端口搜索范围，读不到 NAT 分配表，也不知道 NAT 的随机种子。
-- TCP 协调服务只交换配对信息、候选地址、轮次和结果；UDP 探测服务只回答 `WHO` 地址查询。
-- 数据由两个客户端发送 `PUNCH → ACK → PING → PONG`。`PONG` 必须匹配本次会话、轮次、对端 id、本 socket 的 nonce、请求序号、来源地址和原始 payload。
-- 双方各自收到至少 **3 个不同请求的数据回包**，协调器才确认 `DONE OK`。客户端也不会仅凭协调器的成功消息就报告连通。
+Windows 上将上面命令的 `python3` 改为 `python`。两个客户端都需要能向服务器发 TCP/UDP、向对端发 UDP，并允许相应回包。如果部署在 NAS 的容器中，容器网络可能再增加一层 NAT；第一次建议直接在 NAS 主机的 Python 中运行。
 
-用户态网关不是内核 network namespace、实体路由器或运营商 CGNAT。这里没有模拟 TCP NAT、真实路由、防火墙、IP 池变化、背景用户、丢包和拥塞；因此实验结果只证明所实现模型下的行为。
+端口没有规律时，可让双方改用多 socket 尝试（第二端把 id 改成 bob）：
+
+```bash
+python3 -u nat4_demo.py peer --server 203.0.113.10:40000 --room nas-test-2 --id alice --strategy fanout --fanout 32 --pps 200
+```
+
+`--pps` 是所有 socket 合计的主动 PUNCH/PING 目标发送频率；ACK/PONG 回复另计。调度器使用小批次补偿系统定时精度，不无限补发积压。增大 fanout 需要更长轮次或更高发送频率，给每个 socket 留出至少三次数据往返的时间。
+
+仅当你另有依据知道 NAT 的端口池时，才使用 `--port-min` 和 `--port-max` 缩小范围。默认 `1024–65535`。`--seed` 可复现客户端的端口猜测；省略则随机选种子，不读取或控制真实 NAT 的分配器。
+
+默认三个探测端点位于同一公网 IP、不同端口；不能据此完整识别仅依赖目标 IP 的映射。`--probes IP:PORT,IP:PORT,IP:PORT` 可指定运行本 demo 的三个探测端点，支持跨公网 IP。这里使用自定义 WHO/SEEN 协议，不能直接填写标准 STUN 服务。程序当前要求 IPv4 字面地址，不解析域名。
 
 ## 两种算法
 
@@ -81,71 +98,41 @@ cargo run --offline --release -- lab --case all --seed 7
 
 理想化地，双方各自从 N 个可用端口中均匀取得 m 个不同映射，两个独立猜测同时命中的概率约为 `(m/N)^2`。它不是只需猜中一侧端口的生日碰撞模型。因此，小池实验可以很容易成功，全范围双随机 NAT 的这套朴素方案效率很低。这个近似不是实网成功率。
 
-## 三台机器实测
 
-需要一台有公网 IPv4 的协调服务器，以及两台位于不同待测 NAT 后面的客户端。源码可在各机器执行 `cargo build --release --offline`；不同操作系统需要分别构建。部署时复制 `target/release/` 下的可执行文件即可。
+## 实验边界与成功证据
 
-服务端，例如 Linux VPS：
+用户态 NAT 模型同时实现目标地址、端口相关映射（APDM）和严格地址、端口相关过滤（APDF）。改变内部 socket 或目标 IP/端口就会产生新映射；每条映射只放行来自精确目标 `IP:port` 的回包，并受有效期、容量限制。
+
+客户端不读取 NAT 映射表；每端分别猜测自己的接收端口，通过协调器交换后发送。`random-small` 明确把 32 个端口的范围告诉了客户端，不能把它的成功率套用到全范围随机的运营商 NAT。全范围随机场景中的失败，也只是给定预算未命中，不是理论上不可能。
+
+数据验证检查 session、room、轮次、对端 id、本 socket 的随机 nonce、请求序号、来源地址、原始 payload。重复 PONG 不重复计数，多个 socket 的回包不累加成同一条成功通路。双方各自至少收到三个有效的不同请求回包，才报告 `DIRECT_OK`。协调器单独发送 `DONE OK` 不能让客户端凭空报告成功。
+
+单文件 `peer` 实验结束会关闭 socket。room/session/nonce 只用于匹配实验报文；打洞与协调协议没有加密或密码学身份认证。隧道模式在成功后复用 socket，并对后续业务数据使用双向 TLS。用户态模型没有模拟真实路由、运营商背景流量、多层 NAT、拥塞或 IP 池变化。
+
+退出码：客户端 `0` 为数据验证成功，`2` 为预算耗尽，运行错误 `1`；`lab` 的 `0` 表示全部符合预期，`2` 表示有结果不同。命令行用法错误由 argparse 返回 `2`，Ctrl+C 返回 `130`。
+
+## 测试与文件
+
+在项目根目录运行完整测试（生成临时测试凭据需要 OpenSSL 命令）：
 
 ```bash
-./target/release/nat4-demo server --bind 0.0.0.0:40000 --rounds 12 --round-ms 1500
+python3 -B -m unittest discover -v
 ```
 
-允许服务端 TCP 40000 和 UDP 40000、40001、40002 通过主机防火墙及云安全组。协调器不应再位于未配置映射的 NAT 后面。
+只验证打洞实验时，运行 `python3 -B -m unittest -v test_nat4_demo`，无需 OpenSSL。测试全部使用回环网络，无需外网或 root。若只有主程序单文件，可直接用前面的 `lab` 命令验证。
 
-客户端 A、B 在 55 秒内启动，使用相同 room 和不同 id。以下 `203.0.113.10` 是文档示例地址，必须替换成协调器真实公网 IPv4。
+打洞测试覆盖 NAT 映射键、精确过滤、过期、容量耗尽、重复及错误回包、协调器假成功、协调器不转发业务数据、四种 NAT 场景、三个独立 Python 进程，以及独立协调进程下的双端严格 NAT。隧道测试覆盖真实三进程转发、WebDAV 上传下载、并发、丢包重传、认证、保活和连接关闭，详见 [TUNNEL.md](TUNNEL.md)。
 
-```powershell
-# A
-.\nat4-demo.exe peer --server 203.0.113.10:40000 --room experiment1 --id alice --strategy predict
+本机验证使用 Windows + Python 3.8.8；回环测试与模拟 NAT 的结果不能直接代表真实运营商网络下的打洞成功率。
 
-# B（另一台机器）
-.\nat4-demo.exe peer --server 203.0.113.10:40000 --room experiment1 --id bob --strategy predict
-```
-
-若端口探测无规律，可在双方尝试：
-
-```powershell
-.\nat4-demo.exe peer --server 203.0.113.10:40000 --room experiment2 --id alice --strategy fanout --fanout 32 --pps 200
-# 另一端同样启动，将 --id 改为 bob。
-```
-
-`--pps` 是每端主动探测和 PING 的总发送速率上限，分摊到所有 socket；ACK/PONG 回复不计入。增大 fanout 时，需要给协调器设置更长 `--round-ms` 或提高这个速率，以留出至少三次数据往返的时间。增加参数只扩大尝试预算，不保证随机 NAT 下成功。
-
-如果你通过独立测量已知公网分配端口池，可以显式指定 `--port-min`、`--port-max`。不要仅根据两三个端口样本就假定运营商只使用某个小池。
-
-默认三个 UDP 探测端点位于同一服务器 IP、不同端口，能观察目的端口相关映射，**不能完整识别仅依赖目的 IP 的映射行为**。可在其他公网 IP 上另外运行探测服务，用 `--probes IP:PORT,IP:PORT,IP:PORT` 指定三个不同探测端点。它们仍使用本 demo 的 WHO/SEEN 协议，不是标准 STUN 服务。
-
-程序退出码：`peer` 为 0 表示已验证，2 表示预算耗尽，1 表示配置、网络或协议错误。`lab` 为 0 表示所有所选实验符合预期，2 表示出现不同结果。
-
-实验结束后 socket 会关闭；此版本只验证通路与 payload 回包，不提供持久隧道、TCP 转发、文件传输或加密通信。room/session/nonce 用于区分实验和请求，不构成密码学认证；协调通道也是明文 TCP。
-
-## 完整检查
-
-```powershell
-cargo fmt --all -- --check
-cargo test --offline
-cargo clippy --offline --all-targets -- -D warnings
-cargo build --offline --release
-.\target\release\nat4-demo.exe lab --case all --seed 7
-```
-
-也可执行 `powershell -ExecutionPolicy Bypass -File .\scripts\verify.ps1`，逐项检查并把实验日志保存到 `logs/lab-seed7.txt`。
-
-测试覆盖映射的目的 IP/端口依赖、内部 socket 隔离、严格来源过滤、过期映射、协调器不转发数据、协调器假成功消息、原生 UDP 收发、三个独立进程的命令行运行，以及四种双 NAT 场景。
-
-## 源码入口
-
-| 文件 | 职责 |
+| 文件 | 用途 |
 |---|---|
-| `src/main.rs` | 命令行、参数与退出码 |
-| `src/peer.rs` | 探测、预测、fanout、双向 payload 验证 |
-| `src/server.rs` | TCP 配对、轮次协调、UDP 地址探测 |
-| `src/nat.rs` | 有有效期和严格过滤的用户态 NAT 模拟器 |
-| `src/wire.rs` | UDP 适配器、实验协议、控制消息 |
-| `src/lab.rs` | 可重复实验及预期结果 |
-| `tests/validation.rs` | 网络行为和结果真实性验证 |
-| `python/nat4_demo.py` | NAS 可用的 Python 单文件实现，包含 server / peer / lab |
-| `python/test_nat4_demo.py` | Python 网络行为验证及 Rust 互通测试 |
+| `nat4_demo.py` | 协调服务器、打洞客户端与本机 NAT 实验 |
+| `nat4_rudp.py` | 隧道的可靠 UDP 传输和认证保活 |
+| `nat4_tunnel.py` | 配对凭据生成、双向 TLS 与 TCP 转发 |
+| `test_nat4_demo.py` | 打洞与 NAT 行为测试 |
+| `test_nat4_tunnel.py` | 传输、TLS 与 WebDAV 转发测试 |
+| `README.md` | 打洞实验、算法与公网部署说明 |
+| `TUNNEL.md` | WebDAV 隧道部署与使用说明 |
 
-设计参考：[RFC 4787 的映射与过滤行为](https://www.rfc-editor.org/rfc/rfc4787.html)、[RFC 5128 §3.5 端口预测](https://www.rfc-editor.org/rfc/rfc5128.html#section-3.5)。代码为本项目独立实现，未继承 frp。
+代码使用项目的 MIT 许可证，从零实现，未继承 frp。

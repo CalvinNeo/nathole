@@ -10,21 +10,21 @@
     -> 127.0.0.1:5005（示例 WebDAV HTTP 端口）
 ```
 
-公网 VPS 只做配对和公网地址探测，不转发文件。原来的 `server` 无须更新，Python / Rust 协调器均使用原有协议。隧道两端需要本次的 Python 程序。
+公网 VPS 只做配对和公网地址探测，不转发文件。协调协议保持兼容，已运行的 Python `server` 可以继续使用。隧道两端需要下面列出的三个 Python 程序文件。
 
-运行要求：Python 3.8+，包含标准库 `ssl`，无 pip 依赖。**OpenSSL 命令只在电脑生成证书时使用，NAS 不需要安装 Rust 或 OpenSSL 命令行程序。** Python 自带的 ssl 模块本身仍需可用。
+运行要求：Python 3.8+，包含标准库 `ssl`，无 pip 依赖。**OpenSSL 命令只在电脑生成证书时使用，NAS 不需要安装 OpenSSL 命令行程序。** Python 自带的 ssl 模块本身仍需可用。
 
 ## 1. 更新两端的程序
 
-电脑项目目录已更新。NAS 上把以下三个文件放在同一个 `python` 目录，覆盖旧的 `nat4_demo.py`：
+电脑和 NAS 上把以下三个文件放在项目根目录：
 
 ```text
-python/nat4_demo.py
-python/nat4_rudp.py
-python/nat4_tunnel.py
+nat4_demo.py
+nat4_rudp.py
+nat4_tunnel.py
 ```
 
-下面命令均从项目根目录执行。Windows Git Bash 使用已经激活的 Conda base 中的 `python`；NAS 使用 `python3`。确认 NAS 的 TLS 支持：
+下面命令均从项目根目录执行。已有配对凭据仍放在该目录下的 `tunnel-keys/`，移动程序无需重新生成凭据。Windows Git Bash 使用已经激活的 Conda base 中的 `python`；NAS 使用 `python3`。确认 NAS 的 TLS 支持：
 
 ```bash
 python3 -c 'import ssl; print(ssl.OPENSSL_VERSION)'
@@ -49,7 +49,7 @@ curl -I --max-time 5 http://127.0.0.1:5005/
 ```bash
 source /c/ProgramData/Anaconda3/etc/profile.d/conda.sh
 conda activate base
-python python/nat4_tunnel.py keygen --out tunnel-keys
+python nat4_tunnel.py keygen --out tunnel-keys
 ```
 
 命令会自动查找电脑已有的 OpenSSL，包括 Anaconda 和 Git for Windows 的安装路径。如果找不到，可用 `--openssl /c/ProgramData/Anaconda3/Library/bin/openssl.exe` 指定。程序通过 Python 调用 OpenSSL，不需要手工输入证书参数。
@@ -74,15 +74,15 @@ tunnel-keys/
 需要重启时，在 VPS 上执行原命令：
 
 ```bash
-python3 -u python/nat4_demo.py server --bind 0.0.0.0:40000 --rounds 12 --round-ms 5000
+python3 -u nat4_demo.py server --bind 0.0.0.0:40000 --rounds 12 --round-ms 5000
 ```
 
-若 VPS 把脚本直接放在当前目录，就去掉 `python/`。VPS 继续放行 TCP 40000 和 UDP 40000–40002；WebDAV 的端口不用开放到 VPS。
+VPS 继续放行 TCP 40000 和 UDP 40000–40002；WebDAV 的端口不用开放到 VPS。
 
 ## 5. NAS 启动服务端转发
 
 ```bash
-python3 -u python/nat4_tunnel.py serve --server 203.0.113.10:40000 --room webdav-1 --id alice --keys tunnel-keys/nas --target 127.0.0.1:5005 2>&1 | tee nas-tunnel.log
+python3 -u nat4_tunnel.py serve --server 203.0.113.10:40000 --room webdav-1 --id alice --keys tunnel-keys/nas --target 127.0.0.1:5005 2>&1 | tee nas-tunnel.log
 ```
 
 `--target` 是 **NAS 本地能连接的 WebDAV 地址**。该地址由 NAS 进程启动参数固定，远端不能请求转发任意其他地址。
@@ -92,7 +92,7 @@ python3 -u python/nat4_tunnel.py serve --server 203.0.113.10:40000 --room webdav
 在 NAS 启动后的 55 秒内，电脑 Git Bash 执行：
 
 ```bash
-python -u python/nat4_tunnel.py connect --server 203.0.113.10:40000 --room webdav-1 --id bob --keys tunnel-keys/client --listen 127.0.0.1:18080 2>&1 | tee pc-tunnel.log
+python -u nat4_tunnel.py connect --server 203.0.113.10:40000 --room webdav-1 --id bob --keys tunnel-keys/client --listen 127.0.0.1:18080 2>&1 | tee pc-tunnel.log
 ```
 
 双方看到 `DIRECT_OK` 后，还会做密钥认证和 TLS 握手。等电脑出现：
@@ -160,9 +160,9 @@ curl --connect-to nas.example.com:5006:127.0.0.1:18080 -u YOUR_WEBDAV_USERNAME -
 运行完整测试（需要电脑可用的 OpenSSL，生成的测试凭据位于临时目录）：
 
 ```bash
-python -B -m unittest discover -s python -v
+python -B -m unittest discover -v
 ```
 
-测试覆盖原有打洞场景、Rust 互通，以及实际三进程打洞后的 1 MiB 上传下载校验、WebDAV PUT/GET/PROPFIND、并发连接、丢包/乱序/重复包、流量背压、TCP 半关闭、严格 NAT 空闲保活、错误密钥、错误证书、缺失客户端证书、目标拒绝连接和对端消失。
+测试覆盖原有打洞场景、独立协调进程下的双端严格 NAT，以及实际三进程打洞后的 1 MiB 上传下载校验、WebDAV PUT/GET/PROPFIND、并发连接、丢包/乱序/重复包、流量背压、TCP 半关闭、严格 NAT 空闲保活、错误密钥、错误证书、缺失客户端证书、目标拒绝连接和对端消失。
 
 设计参考：[Python SSL](https://docs.python.org/3/library/ssl.html)、[asyncio 已连接 socket 的 TLS 接入](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.connect_accepted_socket)、[RFC 8085 UDP 使用建议](https://www.rfc-editor.org/rfc/rfc8085.html)。
