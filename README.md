@@ -1,5 +1,8 @@
 # NAT4 UDP 打洞与 WebDAV 隧道
 
+**Persistent service / application integration:** see [SERVICE.md](SERVICE.md)
+for supervised peers, automatic reconnection, and the JSON control interface.
+
 **WebDAV / TCP 持续转发：** 部署见 [TUNNEL.md](TUNNEL.md)。使用 `nat4_tunnel.py serve/connect`，支持保活、可靠传输、双向 TLS 和并发 TCP 连接；需要项目根目录中的三个程序文件。下文介绍可独立运行的单文件打洞实验。
 
 **打洞实验只需要 `nat4_demo.py` 一个文件和 Python 3.8+，全部使用标准库。** 不需要 pip、虚拟环境或第三方包。服务器、客户端、本机 NAT 模拟器都在这个文件里。隧道所需的另外两个模块也只使用标准库；生成配对凭据时需要电脑上的 OpenSSL 命令。

@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import contextlib
 import ipaddress
+import json
 from pathlib import Path
 import secrets
 import shutil
@@ -461,6 +462,10 @@ async def run_tunnel(endpoint, remote, session, own_id, other_id, is_server, sec
 
 
 def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "daemon":
+        from nat4_service import main as service_main
+        return service_main(arguments[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     keys = commands.add_parser("keygen", help="create a private CA and separate NAS/PC credentials")
@@ -472,6 +477,7 @@ def main(argv=None):
         command.add_argument("--room", default="webdav-1")
         command.add_argument("--id", default="alice" if role == "serve" else "bob")
         command.add_argument("--keys", required=True, help="nas/ or client/ credentials from keygen")
+        command.add_argument("--events-json", action="store_true", help="emit versioned lifecycle events on stdout")
         command.add_argument("--strategy", choices=("predict", "fanout"), default="predict")
         command.add_argument("--fanout", type=int, default=32)
         command.add_argument("--pps", type=int, default=200)
@@ -483,12 +489,14 @@ def main(argv=None):
             command.add_argument("--target", default="127.0.0.1:5005", help="fixed TCP service on NAS")
         else:
             command.add_argument("--listen", default="127.0.0.1:18080", help="local loopback TCP listener")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     try:
         if args.command == "keygen":
             keygen(args.out, args.openssl)
             return 0
         is_server = args.command == "serve"
+        if args.events_json:
+            n.log = lambda message: print(message, file=sys.stderr, flush=True)
         secret, context = credentials(args.keys, is_server)
         target = n.address(args.target) if is_server else None
         listen = n.address(args.listen, allow_zero=True) if not is_server else None
@@ -502,8 +510,13 @@ def main(argv=None):
 
         def connected(endpoint, remote, session, other):
             n.log("[tunnel] direct path verified; starting peer authentication and TLS")
+            def ready(mux):
+                if args.events_json:
+                    key = "target" if is_server else "listen"
+                    value = mux.target if is_server else mux.listen
+                    print(json.dumps({"version": 1, "event": "ready", key: n.addr_text(value)}), flush=True)
             asyncio.run(run_tunnel(endpoint, remote, session, args.id, other, is_server,
-                                   secret, context, target, listen, rate=args.rate_kib * 1024))
+                                   secret, context, target, listen, on_ready=ready, rate=args.rate_kib * 1024))
 
         result = n.run_peer(cfg, on_connected=connected)
         return 0 if result.connected else 2
