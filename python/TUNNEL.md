@@ -69,7 +69,7 @@ tunnel-keys/
 
 ## 4. 公网服务器保持原协调服务运行
 
-你已使用的协调地址是 `47.100.82.242:40000`。如果原服务仍在运行，无须再启动第二个。
+下文使用 `203.0.113.10:40000` 作为协调地址示例，请替换为你自己的公网服务器 IP 和端口。如果原服务仍在运行，无须再启动第二个。
 
 需要重启时，在 VPS 上执行原命令：
 
@@ -82,7 +82,7 @@ python3 -u python/nat4_demo.py server --bind 0.0.0.0:40000 --rounds 12 --round-m
 ## 5. NAS 启动服务端转发
 
 ```bash
-python3 -u python/nat4_tunnel.py serve --server 47.100.82.242:40000 --room webdav-1 --id alice --keys tunnel-keys/nas --target 127.0.0.1:5005 2>&1 | tee nas-tunnel.log
+python3 -u python/nat4_tunnel.py serve --server 203.0.113.10:40000 --room webdav-1 --id alice --keys tunnel-keys/nas --target 127.0.0.1:5005 2>&1 | tee nas-tunnel.log
 ```
 
 `--target` 是 **NAS 本地能连接的 WebDAV 地址**。该地址由 NAS 进程启动参数固定，远端不能请求转发任意其他地址。
@@ -92,7 +92,7 @@ python3 -u python/nat4_tunnel.py serve --server 47.100.82.242:40000 --room webda
 在 NAS 启动后的 55 秒内，电脑 Git Bash 执行：
 
 ```bash
-python -u python/nat4_tunnel.py connect --server 47.100.82.242:40000 --room webdav-1 --id bob --keys tunnel-keys/client --listen 127.0.0.1:18080 2>&1 | tee pc-tunnel.log
+python -u python/nat4_tunnel.py connect --server 203.0.113.10:40000 --room webdav-1 --id bob --keys tunnel-keys/client --listen 127.0.0.1:18080 2>&1 | tee pc-tunnel.log
 ```
 
 双方看到 `DIRECT_OK` 后，还会做密钥认证和 TLS 握手。等电脑出现：

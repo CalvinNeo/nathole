@@ -1,5 +1,6 @@
 /target/
 /logs/
+*.log
 __pycache__/
 *.py[cod]
 /tunnel-keys/
