@@ -1,6 +1,8 @@
-# NAT4 UDP 打洞实验（Rust）
+# NAT4 UDP 打洞实验（Rust / Python）
 
 从零实现，纯 Rust 标准库，无第三方 crate。本机验证环境是 Windows；服务器和客户端使用可移植的标准网络接口。
+
+**NAS / Python 版已提供：** [`python/nat4_demo.py`](python/nat4_demo.py) 是 Python 3.8+ 单文件程序，仅使用标准库，无须安装 Rust 或 pip 依赖；服务器和客户端均可与 Rust 版混用。部署步骤见 [`python/README.md`](python/README.md)。在项目根目录执行 `python3 -u python/nat4_demo.py lab --case all --seed 7` 即可先做本机验证。以下构建命令与时长默认值针对 Rust 版。
 
 它验证的是：两个具有**目标相关映射（APDM）和地址、端口相关过滤（APDF）**的 NAT 后面的客户端，能否建立 UDP 数据通路。这个组合对应这里讨论的严格对称型 NAT4。
 
@@ -141,5 +143,7 @@ cargo build --offline --release
 | `src/wire.rs` | UDP 适配器、实验协议、控制消息 |
 | `src/lab.rs` | 可重复实验及预期结果 |
 | `tests/validation.rs` | 网络行为和结果真实性验证 |
+| `python/nat4_demo.py` | NAS 可用的 Python 单文件实现，包含 server / peer / lab |
+| `python/test_nat4_demo.py` | Python 网络行为验证及 Rust 互通测试 |
 
 设计参考：[RFC 4787 的映射与过滤行为](https://www.rfc-editor.org/rfc/rfc4787.html)、[RFC 5128 §3.5 端口预测](https://www.rfc-editor.org/rfc/rfc5128.html#section-3.5)。代码为本项目独立实现，未继承 frp。
